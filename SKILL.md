@@ -132,71 +132,35 @@ fi
 
 ## Step 4: Google Docs 作成・Drive 保存（gog CLI）
 
-### 4-1. ドキュメント作成
+概要と全文をテキストファイルに書き出し、`gog drive upload --convert-to=doc` で**1コマンド**でGoogle Docに変換してDriveに保存する。
+トークン取得・API直呼び不要。gog が認証を完全に内部管理する。
 
 ```bash
-# タイトルを日付入りで生成
 TITLE="OpenClaw 文字起こし — $(date '+%Y-%m-%d %H:%M')"
-
-# gog CLI で Google Doc を作成し、Doc ID を取得
-DOC_ID=$(gog docs create --title "$TITLE" --json | python3 -c "import sys,json; print(json.load(sys.stdin)['documentId'])")
-
-echo "Doc ID: $DOC_ID"
-```
-
-### 4-2. 認証トークン取得 → コンテンツ挿入（Docs API）
-
-```bash
-# gog が管理する OAuth トークンを取得
-TOKEN=$(gog auth token "$GOG_ACCOUNT")
-
 SUMMARY=$(cat /tmp/openclaw_audio/summary.txt)
 TRANSCRIPT=$(cat /tmp/openclaw_audio/transcript.txt)
 
-# batchUpdate で概要・全文を挿入
-python3 - <<EOF
-import json, urllib.request, os
+# 概要＋全文をテキストファイルに整形
+cat > /tmp/openclaw_audio/output.txt << CONTENT
+概要
 
-doc_id   = "$DOC_ID"
-token    = "$TOKEN"
-summary  = open("/tmp/openclaw_audio/summary.txt").read()
-transcript = open("/tmp/openclaw_audio/transcript.txt").read()
+${SUMMARY}
 
-# 挿入リクエスト（末尾→先頭の逆順で index がずれない）
-body = {"requests": [
-    {"insertText": {"location": {"index": 1}, "text": "概要\n" + summary + "\n\n文字起こし全文\n" + transcript + "\n"}},
-    {"updateParagraphStyle": {
-        "range": {"startIndex": 1, "endIndex": 4},
-        "paragraphStyle": {"namedStyleType": "HEADING_1"},
-        "fields": "namedStyleType"
-    }},
-]}
 
-req = urllib.request.Request(
-    f"https://docs.googleapis.com/v1/documents/{doc_id}:batchUpdate",
-    data=json.dumps(body).encode(),
-    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-    method="POST"
-)
-urllib.request.urlopen(req)
-print(f"CREATED: https://docs.google.com/document/d/{doc_id}/edit")
-EOF
-```
+文字起こし全文
 
-### 4-3. Drive フォルダへ移動（任意）
+${TRANSCRIPT}
+CONTENT
 
-```bash
-# GOOGLE_DRIVE_FOLDER_ID が設定されていれば移動
-if [ -n "${GOOGLE_DRIVE_FOLDER_ID:-}" ]; then
-  TOKEN=$(gog auth token "$GOG_ACCOUNT")
-  # 現在の親を取得して移動
-  curl -s -X PATCH \
-    "https://www.googleapis.com/drive/v3/files/${DOC_ID}?addParents=${GOOGLE_DRIVE_FOLDER_ID}&removeParents=root&fields=id,parents" \
-    -H "Authorization: Bearer ${TOKEN}" \
-    -H "Content-Type: application/json"
-fi
+# gog でアップロード → Google Doc に変換（フォルダ指定は任意）
+DOC_JSON=$(gog drive upload /tmp/openclaw_audio/output.txt \
+  --convert-to=doc \
+  --name "$TITLE" \
+  ${GOOGLE_DRIVE_FOLDER_ID:+--parent "$GOOGLE_DRIVE_FOLDER_ID"} \
+  --json)
 
-echo "URL: https://docs.google.com/document/d/${DOC_ID}/edit"
+DOC_ID=$(echo "$DOC_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+echo "CREATED: https://docs.google.com/document/d/${DOC_ID}/edit"
 ```
 
 ---
@@ -221,4 +185,4 @@ rm -rf /tmp/openclaw_audio/
 | soundcore.com UI 変更 | `screenshot` で状況確認しユーザーに報告する |
 | 音声ファイル 25MB 超 | `ffmpeg` で分割してから処理する |
 | `ffmpeg` 未インストール | `brew install ffmpeg` を提案する |
-| gog トークン期限切れ | `gog auth refresh $GOG_ACCOUNT` を実行する |
+| gog 認証エラー | `gog auth add $GOG_ACCOUNT --services drive,docs` を再実行する |
