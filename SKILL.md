@@ -1,10 +1,9 @@
 ---
 name: openclaw-audio-transcribe
 description: soundcore.comから音声ファイルを取得し、Whisper APIで文字起こし、子エージェントで要約して、Google Docsにまとめる音声処理スキル。会議録・インタビュー・音声メモの自動ドキュメント化に使用する。
-version: 1.2.0
+version: 1.3.0
 homepage: https://github.com/geennodian/openclaw-skill
-allowed-tools: Bash(agent-browser:*)
-metadata: {"openclaw": {"emoji": "🎙️", "requires": {"env": ["OPENAI_API_KEY", "GOG_ACCOUNT"], "bins": ["agent-browser", "gog", "curl"]}, "primaryEnv": "OPENAI_API_KEY", "install": [{"id": "agent-browser", "kind": "brew", "formula": "agent-browser", "bins": ["agent-browser"], "label": "Install agent-browser（OpenClaw公式ブラウザCLI）"}, {"id": "gogcli", "kind": "brew", "formula": "gogcli", "bins": ["gog"], "label": "Install gog CLI（Google認証・Docs/Drive操作）"}, {"id": "ffmpeg", "kind": "brew", "formula": "ffmpeg", "bins": ["ffmpeg"], "label": "Install ffmpeg（25MB超の音声ファイル分割用・任意）"}]}}
+metadata: {"openclaw": {"emoji": "🎙️", "requires": {"env": ["OPENAI_API_KEY", "GOG_ACCOUNT"], "bins": ["gog", "curl"]}, "primaryEnv": "OPENAI_API_KEY", "install": [{"id": "gogcli", "kind": "brew", "formula": "gogcli", "bins": ["gog"], "label": "Install gog CLI（Google認証・Docs/Drive操作）"}, {"id": "ffmpeg", "kind": "brew", "formula": "ffmpeg", "bins": ["ffmpeg"], "label": "Install ffmpeg（25MB超の音声ファイル分割用・任意）"}]}}
 ---
 
 # OpenClaw Audio Transcribe
@@ -18,7 +17,6 @@ soundcore.com から音声を取得 → Whisper API で文字起こし → **子
 | `OPENAI_API_KEY` | `export OPENAI_API_KEY=sk-...` |
 | `GOG_ACCOUNT` | `export GOG_ACCOUNT=you@gmail.com` |
 | `gog` CLI | `brew install gogcli` → `gog auth add $GOG_ACCOUNT --services drive,docs` |
-| `agent-browser` | `brew install agent-browser`（OpenClaw公式ブラウザCLI） |
 | `ffmpeg` | 任意。`brew install ffmpeg`（25MB超の音声のみ必要） |
 
 ## 使い方
@@ -54,38 +52,24 @@ soundcore.com から音声を取得 → Whisper API で文字起こし → **子
 
 ---
 
-## Step 1: 音声ファイルの取得（agent-browser）
+## Step 1: 音声ファイルの取得（OpenClaw 組み込みブラウザツール）
 
-**OpenClaw 公式ブラウザ CLI `agent-browser`** を使って soundcore.com を操作する。
-操作パターン: `open → snapshot → interact（refで） → re-snapshot → verify`
+OpenClaw の **組み込み `browser` ツール**（`group:ui`）を使って soundcore.com を操作する。
+CLI ではなくエージェントのツール呼び出しとして実行されるため、コマンドではなく操作の意図を記述する。
+
+1. `https://ai.soundcore.com/home` にナビゲートする
+2. ページのスクリーンショットを撮影して表示内容を確認する
+3. ユーザーが指定した音声ファイル（または最新のもの）をページ上で特定する
+4. **ダウンロード前にユーザーへ対象ファイル名を提示して許可を得る**（セキュリティルール）
+5. ダウンロードボタンまたはリンクをクリックして音声ファイルを取得する
+6. ダウンロード完了後、ファイルを `/tmp/openclaw_audio/` に移動する
 
 ```bash
 mkdir -p /tmp/openclaw_audio
-
-# 1. soundcore.com を開く
-agent-browser open https://ai.soundcore.com/home
-
-# 2. ページの対話要素を取得（アクセシビリティツリー）
-agent-browser snapshot -i
-
-# 3. スクリーンショットでページ状態を確認
-agent-browser screenshot --out /tmp/openclaw_audio/page.png
-
-# 4. ユーザーが指定した音声ファイル（または最新）の ref を特定
-#    → snapshot の出力から対象ファイルの @ref（例: @e3）を読み取る
-
-# 5. [確認] ダウンロード前にユーザーへ対象ファイル名を提示して許可を得る
-
-# 6. ダウンロードボタンを ref でクリック
-agent-browser click @e3   # ← ref は snapshot の出力から置き換える
-
-# 7. ダウンロード完了後、ファイルを /tmp/openclaw_audio/ に移動
-#    （ブラウザのデフォルトダウンロード先から mv する）
 ```
 
-- ダウンロード先: `/tmp/openclaw_audio/`
 - 対応形式: `mp3` / `m4a` / `wav` / `webm`
-- UI が変更されていた場合: `snapshot -i` → `screenshot` を繰り返し、ref を再取得して適応する
+- UI が変更されていた場合: スクリーンショットで状況を確認し、ページ内容を再読み取りして適応する
 
 ---
 
@@ -198,8 +182,8 @@ rm -rf /tmp/openclaw_audio/
 | `OPENAI_API_KEY` 未設定 | `export OPENAI_API_KEY=sk-...` を案内する |
 | `GOG_ACCOUNT` 未設定 | `export GOG_ACCOUNT=you@gmail.com` を案内する |
 | `gog` 未認証 | `gog auth add $GOG_ACCOUNT --services drive,docs` を実行するよう案内する |
-| soundcore.com UI 変更 | `agent-browser snapshot -i` → `agent-browser screenshot` で状況確認しユーザーに報告する |
-| `agent-browser` 未インストール | `brew install agent-browser` を案内する |
+| soundcore.com UI 変更 | ブラウザでスクリーンショットを撮り状況確認しユーザーに報告する |
+| browser ツール無効 | OpenClaw の `full` プロファイル（`group:ui`）が有効か確認する |
 | 音声ファイル 25MB 超 | `ffmpeg` で分割してから処理する |
 | `ffmpeg` 未インストール | `brew install ffmpeg` を提案する |
 | gog 認証エラー | `gog auth add $GOG_ACCOUNT --services drive,docs` を再実行する |
