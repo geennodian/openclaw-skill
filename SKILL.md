@@ -1,24 +1,23 @@
 ---
 name: openclaw-audio-transcribe
-description: soundcore.comから音声ファイルを取得し、Whisper APIで文字起こし、Codex CLIで要約して、Google Docsにまとめる音声処理スキル。会議録・インタビュー・音声メモの自動ドキュメント化に使用する。
-version: 1.0.0
+description: soundcore.comから音声ファイルを取得し、Whisper APIで文字起こし、子エージェントで要約して、Google Docsにまとめる音声処理スキル。会議録・インタビュー・音声メモの自動ドキュメント化に使用する。
+version: 1.1.0
 homepage: https://github.com/geennodian/openclaw-skill
-metadata: {"openclaw": {"emoji": "🎙️", "requires": {"env": ["OPENAI_API_KEY"], "bins": ["python3", "codex"], "anyBins": ["ffmpeg"]}, "primaryEnv": "OPENAI_API_KEY", "install": [{"id": "google-api-python", "kind": "uv", "package": "google-api-python-client google-auth-oauthlib", "label": "Install Google API Python client"}, {"id": "ffmpeg", "kind": "brew", "formula": "ffmpeg", "bins": ["ffmpeg"], "label": "Install ffmpeg（25MB超の音声ファイル分割用・任意）"}]}}
+metadata: {"openclaw": {"emoji": "🎙️", "requires": {"env": ["OPENAI_API_KEY", "GOG_ACCOUNT"], "bins": ["gog", "curl"]}, "primaryEnv": "OPENAI_API_KEY", "install": [{"id": "gogcli", "kind": "brew", "formula": "gogcli", "bins": ["gog"], "label": "Install gog CLI（Google認証・Docs/Drive操作）"}, {"id": "ffmpeg", "kind": "brew", "formula": "ffmpeg", "bins": ["ffmpeg"], "label": "Install ffmpeg（25MB超の音声ファイル分割用・任意）"}]}}
 ---
 
 # OpenClaw Audio Transcribe
 
-soundcore.com から音声を取得 → Whisper API で文字起こし → Codex CLI で要約 → Google Docs に保存する、一気通貫の音声ドキュメント化スキル。
+soundcore.com から音声を取得 → Whisper API で文字起こし → **子エージェント**で要約 → Google Docs に保存する、一気通貫の音声ドキュメント化スキル。
 
 ## 前提条件
 
-| 項目 | 内容 |
+| 項目 | 設定方法 |
 |---|---|
-| `OPENAI_API_KEY` | OpenAI API キー（Whisper API 利用） |
-| `~/.openclaw/credentials.json` | GCP OAuth 2.0 クライアント認証情報 |
-| `python3` | Python 3.8 以上 |
-| `codex` | Codex CLI（要約生成） |
-| `ffmpeg` | 任意。25MB 超の音声ファイルを分割する場合に必要 |
+| `OPENAI_API_KEY` | `export OPENAI_API_KEY=sk-...` |
+| `GOG_ACCOUNT` | `export GOG_ACCOUNT=you@gmail.com` |
+| `gog` CLI | `brew install gogcli` → `gog auth add $GOG_ACCOUNT --services drive,docs` |
+| `ffmpeg` | 任意。`brew install ffmpeg`（25MB超の音声のみ必要） |
 
 ## 使い方
 
@@ -31,42 +30,46 @@ soundcore.com から音声を取得 → Whisper API で文字起こし → Codex
 
 ---
 
-## 処理フロー
+## サブエージェント構成
 
-このスキルが呼び出されたら、**必ずサブエージェント（`run_in_background: true`）** で以下 Step 1〜5 を実行すること。
-メイン側はユーザーに「処理を開始しました」と即座に応答し、他の指示を受け付け続ける。
+このスキルが呼び出されたら、**必ず `run_in_background: true` でサブエージェントを起動**すること。
+メイン側は「処理を開始しました」とユーザーに即応答し、他の指示を受け付け続ける。
 
 ```
 [ユーザー] → スキル呼び出し
      ↓
 [メイン] 即応答「処理を開始しました」
      ↓ Agent(run_in_background: true)
-[サブエージェント]
-  Step 1: Chrome MCP → 音声取得
+[サブエージェントA: パイプライン全体]
+  Step 1: ブラウザ操作 → 音声取得
   Step 2: Whisper API → 文字起こし
-  Step 3: Codex CLI → 要約
-  Step 4: Google Docs API → ドキュメント作成・Drive保存
+  Step 3: 子エージェントB（要約専任）← Agent を入れ子で起動
+  Step 4: gog CLI + Docs API → Google Docs作成・Drive保存
   Step 5: /tmp クリーンアップ
-     ↓ 完了通知
+     ↓ 完了
 [メイン] Google Docs URL をユーザーに報告
 ```
 
 ---
 
-## Step 1: 音声ファイルの取得（Chrome MCP）
+## Step 1: 音声ファイルの取得（ブラウザ操作）
 
-1. `tabs_context_mcp` でブラウザタブを確認する
-2. 必要に応じ `tabs_create_mcp` で新規タブを作成する
-3. `navigate` で `https://ai.soundcore.com/home` にアクセスする
-4. `screenshot` でページの状態を確認する
-5. ユーザーが指定した音声ファイル（または最新）を特定する
-6. `find` / `read_page` でダウンロードリンク・ボタンを探す
-7. **ダウンロード前にユーザーへ確認する**（セキュリティルール）
-8. `/tmp/openclaw_audio/` へダウンロードする
+以下の操作を **OpenClaw のブラウザツール**（`mcp__Claude_in_Chrome__` 系）で実行する。
 
-対応形式: `mp3` / `m4a` / `wav` / `webm`
+```
+1. mcp__Claude_in_Chrome__tabs_context_mcp  → 現在のタブ状態を確認
+2. mcp__Claude_in_Chrome__tabs_create_mcp   → 新規タブを作成（必要な場合）
+3. mcp__Claude_in_Chrome__navigate          → https://ai.soundcore.com/home にアクセス
+4. mcp__Claude_in_Chrome__screenshot        → ページ状態を画像で確認
+5. mcp__Claude_in_Chrome__read_page         → ページ全文を取得し音声ファイル一覧を特定
+6. mcp__Claude_in_Chrome__find              → ダウンロードリンク・ボタンの DOM 要素を特定
+7. [確認] ダウンロード前にユーザーへ対象ファイル名を提示して許可を得る
+8. mcp__Claude_in_Chrome__navigate          → ダウンロード URL に直接アクセスしてファイル取得
+```
 
-> **注意**: soundcore.com の UI が変更されている場合は `screenshot` → `find` を繰り返して適応する。
+- ダウンロード先: `/tmp/openclaw_audio/`（`mkdir -p` で作成）
+- 対応形式: `mp3` / `m4a` / `wav` / `webm`
+- UI が変更されていた場合: `screenshot` → `find` → `read_page` を繰り返して適応する
 
 ---
 
@@ -74,8 +77,6 @@ soundcore.com から音声を取得 → Whisper API で文字起こし → Codex
 
 ```bash
 mkdir -p /tmp/openclaw_audio
-
-# ファイルサイズ確認
 FILE="/tmp/openclaw_audio/<ダウンロードしたファイル名>"
 SIZE=$(stat -f%z "$FILE" 2>/dev/null || stat -c%s "$FILE")
 
@@ -108,139 +109,94 @@ fi
 
 ---
 
-## Step 3: 要約（Codex CLI）
+## Step 3: 要約（子エージェント）
 
-```bash
-cat /tmp/openclaw_audio/transcript.txt \
-  | codex "以下の文字起こしテキストの概要を日本語で作成してください。要点を箇条書きで整理し、最後に3行以内の総括を付けてください。" \
-  > /tmp/openclaw_audio/summary.txt
+**Codex CLI は不要。** Agent ツールで子エージェントを起動し、要約を生成させる。
+
+サブエージェントへのプロンプト:
+
+```
+以下の文字起こしテキストの概要を日本語で作成してください。
+- 要点を箇条書きで整理する
+- 最後に 3 行以内の総括を付ける
+- 出力はプレーンテキストのみ（マークダウン記号不要）
+
+--- 文字起こし ---
+<transcript.txt の全文>
+--- ここまで ---
 ```
 
-`codex` が見つからない場合（`which codex` が失敗）:
-- ユーザーに通知し、`npm install -g @openai/codex` を案内する
-- ユーザーの許可を得た上でインストールを試みる
+子エージェントの返答を `/tmp/openclaw_audio/summary.txt` に書き出す。
 
 ---
 
-## Step 4: Google Docs 作成・Drive 保存（Python）
+## Step 4: Google Docs 作成・Drive 保存（gog CLI）
 
-以下スクリプトを `/tmp/openclaw_audio/create_gdoc.py` として書き出し実行する。
-
-```python
-#!/usr/bin/env python3
-"""OpenClaw: Google Docs 作成スクリプト"""
-import sys, os, pickle
-from datetime import datetime
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-
-SCOPES = [
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/drive.file",
-]
-TOKEN_PATH  = os.path.expanduser("~/.openclaw/token.pickle")
-CREDS_PATH  = os.path.expanduser("~/.openclaw/credentials.json")
-
-def get_credentials():
-    creds = None
-    os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
-    if os.path.exists(TOKEN_PATH):
-        with open(TOKEN_PATH, "rb") as f:
-            creds = pickle.load(f)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDS_PATH):
-                print(f"ERROR: {CREDS_PATH} が見つかりません。")
-                print("GCP コンソールから OAuth 2.0 クライアント ID の JSON をダウンロードし")
-                print(f"{CREDS_PATH} に配置してください。")
-                sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(CREDS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, "wb") as f:
-            pickle.dump(creds, f)
-    return creds
-
-def build_requests(summary: str, transcript: str):
-    """batchUpdate 用リクエストリストを構築"""
-    reqs = []
-    cursor = 1
-
-    def insert(text):
-        nonlocal cursor
-        reqs.append({"insertText": {"location": {"index": cursor}, "text": text}})
-        cursor += len(text)
-
-    def heading(start, end):
-        reqs.append({"updateParagraphStyle": {
-            "range": {"startIndex": start, "endIndex": end},
-            "paragraphStyle": {"namedStyleType": "HEADING_1"},
-            "fields": "namedStyleType",
-        }})
-
-    # 概要セクション
-    h1_start = cursor
-    insert("概要\n")
-    heading(h1_start, cursor)
-    insert(summary + "\n\n")
-
-    # 全文セクション
-    h2_start = cursor
-    insert("文字起こし全文\n")
-    heading(h2_start, cursor)
-    insert(transcript + "\n")
-
-    return reqs
-
-def create_doc(summary: str, transcript: str, folder_id: str | None = None):
-    creds = get_credentials()
-    docs  = build("docs",  "v1", credentials=creds)
-    drive = build("drive", "v3", credentials=creds)
-
-    title = f"OpenClaw 文字起こし — {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-    doc   = docs.documents().create(body={"title": title}).execute()
-    doc_id = doc["documentId"]
-
-    docs.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": build_requests(summary, transcript)},
-    ).execute()
-
-    if folder_id:
-        drive.files().update(
-            fileId=doc_id,
-            addParents=folder_id,
-            removeParents="root",
-            fields="id, parents",
-        ).execute()
-
-    url = f"https://docs.google.com/document/d/{doc_id}/edit"
-    print(f"CREATED: {url}")
-    return url
-
-if __name__ == "__main__":
-    transcript_path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/openclaw_audio/transcript.txt"
-    summary_path    = sys.argv[2] if len(sys.argv) > 2 else "/tmp/openclaw_audio/summary.txt"
-    folder_id       = sys.argv[3] if len(sys.argv) > 3 else None
-
-    with open(transcript_path) as f: transcript = f.read()
-    with open(summary_path)    as f: summary    = f.read()
-
-    create_doc(summary, transcript, folder_id)
-```
+### 4-1. ドキュメント作成
 
 ```bash
-# 依存パッケージ確認・インストール
-pip3 show google-api-python-client google-auth-oauthlib > /dev/null 2>&1 \
-  || pip3 install google-api-python-client google-auth-oauthlib
+# タイトルを日付入りで生成
+TITLE="OpenClaw 文字起こし — $(date '+%Y-%m-%d %H:%M')"
 
-# 実行（フォルダ ID は任意）
-python3 /tmp/openclaw_audio/create_gdoc.py \
-  /tmp/openclaw_audio/transcript.txt \
-  /tmp/openclaw_audio/summary.txt \
-  "${GOOGLE_DRIVE_FOLDER_ID:-}"
+# gog CLI で Google Doc を作成し、Doc ID を取得
+DOC_ID=$(gog docs create --title "$TITLE" --json | python3 -c "import sys,json; print(json.load(sys.stdin)['documentId'])")
+
+echo "Doc ID: $DOC_ID"
+```
+
+### 4-2. 認証トークン取得 → コンテンツ挿入（Docs API）
+
+```bash
+# gog が管理する OAuth トークンを取得
+TOKEN=$(gog auth token "$GOG_ACCOUNT")
+
+SUMMARY=$(cat /tmp/openclaw_audio/summary.txt)
+TRANSCRIPT=$(cat /tmp/openclaw_audio/transcript.txt)
+
+# batchUpdate で概要・全文を挿入
+python3 - <<EOF
+import json, urllib.request, os
+
+doc_id   = "$DOC_ID"
+token    = "$TOKEN"
+summary  = open("/tmp/openclaw_audio/summary.txt").read()
+transcript = open("/tmp/openclaw_audio/transcript.txt").read()
+
+# 挿入リクエスト（末尾→先頭の逆順で index がずれない）
+body = {"requests": [
+    {"insertText": {"location": {"index": 1}, "text": "概要\n" + summary + "\n\n文字起こし全文\n" + transcript + "\n"}},
+    {"updateParagraphStyle": {
+        "range": {"startIndex": 1, "endIndex": 4},
+        "paragraphStyle": {"namedStyleType": "HEADING_1"},
+        "fields": "namedStyleType"
+    }},
+]}
+
+req = urllib.request.Request(
+    f"https://docs.googleapis.com/v1/documents/{doc_id}:batchUpdate",
+    data=json.dumps(body).encode(),
+    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    method="POST"
+)
+urllib.request.urlopen(req)
+print(f"CREATED: https://docs.google.com/document/d/{doc_id}/edit")
+EOF
+```
+
+### 4-3. Drive フォルダへ移動（任意）
+
+```bash
+# GOOGLE_DRIVE_FOLDER_ID が設定されていれば移動
+if [ -n "${GOOGLE_DRIVE_FOLDER_ID:-}" ]; then
+  TOKEN=$(gog auth token "$GOG_ACCOUNT")
+  # 現在の親を取得して移動
+  curl -s -X PATCH \
+    "https://www.googleapis.com/drive/v3/files/${DOC_ID}?addParents=${GOOGLE_DRIVE_FOLDER_ID}&removeParents=root&fields=id,parents" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Content-Type: application/json"
+fi
+
+echo "URL: https://docs.google.com/document/d/${DOC_ID}/edit"
 ```
 
 ---
@@ -260,9 +216,9 @@ rm -rf /tmp/openclaw_audio/
 | エラー | 対処 |
 |---|---|
 | `OPENAI_API_KEY` 未設定 | `export OPENAI_API_KEY=sk-...` を案内する |
+| `GOG_ACCOUNT` 未設定 | `export GOG_ACCOUNT=you@gmail.com` を案内する |
+| `gog` 未認証 | `gog auth add $GOG_ACCOUNT --services drive,docs` を実行するよう案内する |
 | soundcore.com UI 変更 | `screenshot` で状況確認しユーザーに報告する |
 | 音声ファイル 25MB 超 | `ffmpeg` で分割してから処理する |
 | `ffmpeg` 未インストール | `brew install ffmpeg` を提案する |
-| `codex` 未インストール | `npm install -g @openai/codex` を案内する |
-| Google API 認証エラー | `~/.openclaw/credentials.json` の配置を案内する |
-| Python パッケージ不足 | `pip3 install google-api-python-client google-auth-oauthlib` を実行する |
+| gog トークン期限切れ | `gog auth refresh $GOG_ACCOUNT` を実行する |
